@@ -1,12 +1,16 @@
 import requests
+from django.contrib.auth import get_user_model
+from rest_framework.authtoken.models import Token
 from rest_framework.exceptions import APIException
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+User = get_user_model()
+
 
 class FacebookLoginAPIView(APIView):
     FACEBOOK_APP_ID = '1824590024236793'
-    FACEBOOK_SECRET_CODE = ''
+    FACEBOOK_SECRET_CODE = '9fbd2e52cbb7290bb6d36b2db934186a'
     APP_ACCESS_TOKEN = '{}|{}'.format(
         FACEBOOK_APP_ID,
         FACEBOOK_SECRET_CODE
@@ -16,8 +20,24 @@ class FacebookLoginAPIView(APIView):
         token = request.data.get('token')
         if not token:
             raise APIException('token require')
-        debug_result = self.debug_token(token)
-        return Response(debug_result)
+        self.debug_token(token)
+        user_info = self.get_user_info(token=token)
+        if User.objects.filter(username=user_info['id']).exists():
+            user = User.objects.get(username=user_info['id'])
+        else:
+            user = User.objects.create_facebook_user(user_info)
+        token, token_created = Token.objects.get_or_create(user=user)
+        ret = {
+            'token': token.key,
+            # 'user': UserSerializer(user).data,
+            'user': {
+                'pk': user.pk,
+                'username': user.username,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+            }
+        }
+        return Response(ret)
 
     def debug_token(self, token):
         url_debug_token = 'https://graph.facebook.com/debug_token'
@@ -27,7 +47,24 @@ class FacebookLoginAPIView(APIView):
         }
         response = requests.get(url_debug_token, params=url_debug_token_params)
         result = response.json()
-        if 'error' in result['data']:
+        if 'error' in result or 'error' in result['data']:
             raise APIException('token invalid')
-        else:
-            return result
+        return result
+
+    def get_user_info(self, token):
+        url_user_info = 'https://graph.facebook.com/v2.9/me'
+        url_user_info_params = {
+            'access_token': token,
+            'fields': ','.join([
+                'id',
+                'name',
+                'first_name',
+                'last_name',
+                'email',
+                'picture.type(large)',
+                'gender',
+            ])
+        }
+        response = requests.get(url_user_info, params=url_user_info_params)
+        result = response.json()
+        return result
